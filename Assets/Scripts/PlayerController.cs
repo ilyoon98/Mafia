@@ -8,13 +8,35 @@ namespace NoirRoulette
         // 플레이어 턴 활성 여부
         private bool isPlayerTurn = false;
 
+        // 이번 턴 직접 발사(ShootButton) 사용 여부 — true이면 ShootButton 비활성화
+        private bool hasDirectShot = false;
+
+        // 턴 종료 가능 여부 — 발사/허공쏘기 중 하나 충족 시 true
+        private bool canEndTurn = false;
+
         // ─────────────────────────────────────────
         // 플레이어 턴 활성/비활성 (GameManager에서 호출)
         // ─────────────────────────────────────────
         public void SetPlayerTurn(bool active)
         {
             isPlayerTurn = active;
-            GameManager.Instance.uiManager.SetPlayerInputActive(active);
+            var ui = GameManager.Instance.uiManager;
+
+            if (active)
+            {
+                // 턴 시작: 발사 가능, 턴 종료 불가
+                hasDirectShot = false;
+                canEndTurn = false;
+                ui.SetPlayerInputActive(true);
+                ui.SetEndTurnButtonActive(false);   // 아직 행동 안 함
+            }
+            else
+            {
+                // 턴 종료: 모든 입력 비활성
+                hasDirectShot = false;
+                canEndTurn = false;
+                ui.SetPlayerInputActive(false);
+            }
         }
 
         // ─────────────────────────────────────────
@@ -40,7 +62,14 @@ namespace NoirRoulette
             }
 
             // 카드 효과 실행
-            CardEffect.Execute(card, true);
+            bool success = CardEffect.Execute(card, true);
+
+            // 허공쏘기 성공 → 턴 종료 조건 충족
+            if (success && card.cardType == CardType.허공쏘기)
+            {
+                canEndTurn = true;
+                gm.uiManager.SetEndTurnButtonActive(true);
+            }
 
             // 핸드에서 제거
             playerDeck.DiscardCard(card);
@@ -111,6 +140,12 @@ namespace NoirRoulette
                 }
             }
 
+            // ShootButton 비활성 + 턴 종료 활성
+            hasDirectShot = true;
+            canEndTurn = true;
+            gm.uiManager.SetShootButtonActive(false);
+            gm.uiManager.SetEndTurnButtonActive(true);
+
             // 전체 UI 갱신
             gm.uiManager.UpdateAll();
         }
@@ -120,9 +155,9 @@ namespace NoirRoulette
         // ─────────────────────────────────────────
         public void OnEndTurnButtonClicked()
         {
-            if (!isPlayerTurn)
+            if (!isPlayerTurn || !canEndTurn)
             {
-                Debug.Log("[플레이어] 플레이어 턴이 아님.");
+                Debug.Log("[플레이어] 턴 종료 조건 미충족.");
                 return;
             }
             GameManager.Instance.EndPlayerTurn();

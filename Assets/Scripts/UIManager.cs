@@ -207,7 +207,7 @@ namespace NoirRoulette
         }
 
         // ─────────────────────────────────────────
-        // 플레이어 입력 활성/비활성 (버튼 interactable)
+        // 플레이어 입력 전체 활성/비활성 (턴 전환 시 사용)
         // ─────────────────────────────────────────
         public void SetPlayerInputActive(bool active)
         {
@@ -223,6 +223,18 @@ namespace NoirRoulette
                     if (btn != null) btn.interactable = active;
                 }
             }
+        }
+
+        // ShootButton 단독 제어 (발사 1회 후 비활성화용)
+        public void SetShootButtonActive(bool active)
+        {
+            if (shootButton != null) shootButton.interactable = active;
+        }
+
+        // EndTurnButton 단독 제어 (턴 종료 조건 충족 시 활성화용)
+        public void SetEndTurnButtonActive(bool active)
+        {
+            if (endTurnButton != null) endTurnButton.interactable = active;
         }
 
         // ─────────────────────────────────────────
