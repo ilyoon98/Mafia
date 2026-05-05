@@ -6,10 +6,22 @@ namespace NoirRoulette
     // 발사 대상
     public enum ShootTarget { Self, Opponent }
 
+    // 약실 칸별 공개 상태
+    public enum CylinderSlotState
+    {
+        Unknown,   // ? — 미확인 (초기값)
+        Revealed,  // 실탄/공탄 공개 (발사 결과 또는 내가 탄 확인 사용)
+        Peeked,    // ! — 상대(빌런)가 탄 확인 사용 (내용 비공개)
+        Consumed   // 발사로 소모된 칸 (원본 탄 종류 보존)
+    }
+
     public class CylinderSystem : MonoBehaviour
     {
-        // 실린더 6칸 (true = 실탄, false = 공탄)
+        // 실린더 6칸 (true = 실탄, false = 공탄) — Consumed 후에도 원본값 유지
         public bool[] slots = new bool[6];
+
+        // 각 칸의 약실 공개 상태
+        public CylinderSlotState[] slotStates = new CylinderSlotState[6];
 
         // 현재 발사할 칸 인덱스 (0~5)
         public int currentIndex = 0;
@@ -30,6 +42,7 @@ namespace NoirRoulette
         {
             baseBulletCount = Mathf.Clamp(bulletCount, 0, 6);
             slots = new bool[6];
+            slotStates = new CylinderSlotState[6]; // 전부 Unknown
             currentIndex = 0;
             isJammed = false;
             shootTarget = ShootTarget.Self;
@@ -73,8 +86,9 @@ namespace NoirRoulette
             Debug.Log($"[발사] {currentIndex + 1}번 칸 [{slotType}] → {targetStr}");
             UIManager.Instance?.AppendLog($"발사! [{slotType}] {currentIndex + 1}번 칸 → {targetStr}");
 
-            // 칸 소모 후 다음으로 이동
-            slots[currentIndex] = false;
+            // 칸 소모 — slots[] 원본값은 유지, 상태만 Consumed로 변경
+            int firedIndex = currentIndex;
+            slotStates[firedIndex] = CylinderSlotState.Consumed;
             currentIndex++;
 
             // 6칸 소모 또는 남은 칸에 실탄이 없으면 자동 재장전
@@ -90,7 +104,7 @@ namespace NoirRoulette
         }
 
         // ─────────────────────────────────────────
-        // 실린더 섞기 — 현재 칸 이후의 탄만 재배치
+        // 실린더 섞기 — 현재 칸 이후의 탄만 재배치, 상태 Unknown 리셋
         // ─────────────────────────────────────────
         public void Shuffle()
         {
@@ -104,6 +118,14 @@ namespace NoirRoulette
                 slots[ai] = slots[aj];
                 slots[aj] = temp;
             }
+
+            // 셔플된 비소모 칸 Unknown으로 리셋 (탄 위치 정보 무효화)
+            for (int i = currentIndex; i < 6; i++)
+            {
+                if (slotStates[i] != CylinderSlotState.Consumed)
+                    slotStates[i] = CylinderSlotState.Unknown;
+            }
+
             Debug.Log("[실린더] 셔플 완료. 탄 정보 초기화.");
             UIManager.Instance?.AppendLog("실린더 섞기! 기존 탄 정보 무효화.");
             LogCylinderState("셔플 후");
@@ -123,7 +145,7 @@ namespace NoirRoulette
                     baseBulletCount = Mathf.Min(6, baseBulletCount + 1);
                     Debug.Log($"[실린더] 실탄 추가! {i + 1}번 칸 → 셔플.");
                     UIManager.Instance?.AppendLog("실탄 1발 추가됨! (셔플)");
-                    Shuffle();
+                    Shuffle(); // Shuffle() 내에서 Unknown 리셋 처리
                     return;
                 }
             }
@@ -133,14 +155,26 @@ namespace NoirRoulette
 
         // ─────────────────────────────────────────
         // 특정 칸 탄 확인 (탄 소모 없음)
+        // isPlayer=true: 내용 공개(Revealed) / false: 상대가 확인(Peeked)
         // ─────────────────────────────────────────
-        public bool PeekSlot(int index)
+        public bool PeekSlot(int index, bool isPlayer)
         {
             if (index < 0 || index >= 6) return false;
             bool isLive = slots[index];
             string type = isLive ? "실탄" : "공탄";
-            Debug.Log($"[탄 확인] {index + 1}번 칸 → [{type}]");
-            UIManager.Instance?.AppendLog($"탄 확인: {index + 1}번 칸 [{type}]");
+
+            if (isPlayer)
+            {
+                slotStates[index] = CylinderSlotState.Revealed;
+                Debug.Log($"[탄 확인] {index + 1}번 칸 → [{type}]");
+                UIManager.Instance?.AppendLog($"탄 확인: {index + 1}번 칸 [{type}]");
+            }
+            else
+            {
+                slotStates[index] = CylinderSlotState.Peeked;
+                Debug.Log($"[탄 확인] 빌런 {index + 1}번 칸 확인. (내용 비공개)");
+                UIManager.Instance?.AppendLog($"빌런 탄 확인: {index + 1}번 칸 [!] (내용 비공개)");
+            }
             return isLive;
         }
 
@@ -154,8 +188,11 @@ namespace NoirRoulette
             Debug.Log($"[허공 쏘기] {currentIndex + 1}번 칸 [{type}] 소모 (허공 발사).");
             UIManager.Instance?.AppendLog($"허공 쏘기! {currentIndex + 1}번 칸 [{type}] 확인 후 소모.");
 
-            slots[currentIndex] = false;
+            // slots[] 원본값 유지, 상태만 Consumed로 변경
+            int firedIndex = currentIndex;
+            slotStates[firedIndex] = CylinderSlotState.Consumed;
             currentIndex++;
+
             if (currentIndex >= 6)
             {
                 Debug.Log("[실린더] 자동 재장전");
@@ -172,6 +209,9 @@ namespace NoirRoulette
             bool current = slots[currentIndex];
             slots[currentIndex] = false;
             slots[5] = current;
+            // 이동된 두 칸 모두 Unknown으로 리셋
+            slotStates[currentIndex] = CylinderSlotState.Unknown;
+            slotStates[5] = CylinderSlotState.Unknown;
             string type = current ? "실탄" : "공탄";
             Debug.Log($"[실린더 넘기기] {currentIndex + 1}번 칸 [{type}] → 6번째 칸으로 이동.");
             UIManager.Instance?.AppendLog($"실린더 넘기기! 현재 [{type}] → 6번째 칸.");
@@ -188,11 +228,29 @@ namespace NoirRoulette
             UIManager.Instance?.AppendLog("잼! 다음 발사는 불발 처리.");
         }
 
+        // ─────────────────────────────────────────
+        // 현재 인덱스 이후 실탄/공탄 수 반환
+        // ─────────────────────────────────────────
+        public int GetLiveBulletCount()
+        {
+            int count = 0;
+            for (int i = currentIndex; i < 6; i++)
+                if (slots[i] && slotStates[i] != CylinderSlotState.Consumed)
+                    count++;
+            return count;
+        }
+
+        public int GetBlankCount()
+        {
+            int remaining = 6 - currentIndex;
+            return remaining - GetLiveBulletCount();
+        }
+
         // 남은 칸에 실탄이 하나라도 있는지 확인
         private bool HasLiveBulletRemaining()
         {
             for (int i = currentIndex; i < 6; i++)
-                if (slots[i]) return true;
+                if (slots[i] && slotStates[i] != CylinderSlotState.Consumed) return true;
             return false;
         }
 
@@ -225,17 +283,33 @@ namespace NoirRoulette
             Debug.Log(sb.ToString());
         }
 
-        // DebugPanel용 실린더 상태 문자열 반환
+        // DebugPanel + UIManager용 실린더 상태 문자열 반환
         public string GetCylinderDisplayString()
         {
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < 6; i++)
             {
-                string mark = slots[i] ? "실" : "공";
-                if (i == currentIndex)
-                    sb.Append($"[▶{mark}]");
+                string cell;
+                switch (slotStates[i])
+                {
+                    case CylinderSlotState.Consumed:
+                        cell = slots[i] ? "실탄✓" : "공탄✓";
+                        break;
+                    case CylinderSlotState.Revealed:
+                        cell = slots[i] ? "실탄" : "공탄";
+                        break;
+                    case CylinderSlotState.Peeked:
+                        cell = "!";
+                        break;
+                    default: // Unknown
+                        cell = "?";
+                        break;
+                }
+
+                if (i == currentIndex && slotStates[i] != CylinderSlotState.Consumed)
+                    sb.Append($"[▶{cell}]");
                 else
-                    sb.Append($"[{mark}]");
+                    sb.Append($"[{cell}]");
             }
             return sb.ToString();
         }

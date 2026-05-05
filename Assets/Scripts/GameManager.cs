@@ -129,6 +129,7 @@ namespace NoirRoulette
             uiManager.SetTurnText($"플레이어 턴  (라운드 {roundCount})");
             uiManager.UpdatePlayerHand(playerDeckManager.hand);
             uiManager.UpdateAll();
+            uiManager.ClearActionLog();         // 매 플레이어 턴 시작 시 행동 기록 초기화
 
             playerController.SetPlayerTurn(true);
         }

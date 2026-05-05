@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using System.Collections.Generic;
+using System.Text;
 
 namespace NoirRoulette
 {
@@ -25,7 +26,10 @@ namespace NoirRoulette
         // Inspector 연결 — 실린더 영역
         // ─────────────────────────────────────────
         [Header("실린더 UI")]
-        public Text cylinder_Text;
+        public Text cylinderCount_Text;         // "실탄 N발 / 공탄 M발" 상단 텍스트
+        public Text cylinder_Text;              // 6칸 슬롯 상태 표시
+        public GameObject slotSelectionPanel;   // 탄 확인 슬롯 선택 패널
+        public Button[] slotSelectButtons;      // 1~6번 슬롯 버튼 (6개)
 
         // ─────────────────────────────────────────
         // Inspector 연결 — 플레이어 영역
@@ -45,6 +49,12 @@ namespace NoirRoulette
         public Text logText;                    // ScrollView 안의 로그 텍스트
 
         // ─────────────────────────────────────────
+        // Inspector 연결 — 행동 기록 패널
+        // ─────────────────────────────────────────
+        [Header("행동 기록 패널")]
+        public Text actionLogText;              // 나 / 상대 행동 요약 텍스트
+
+        // ─────────────────────────────────────────
         // Inspector 연결 — 게임오버 패널
         // ─────────────────────────────────────────
         [Header("게임오버 패널")]
@@ -62,6 +72,10 @@ namespace NoirRoulette
         private string logBuffer = "";
         private const int maxLogLines = 30;     // 로그 최대 줄 수
 
+        // 행동 기록 (턴마다 초기화)
+        private readonly List<string> _playerActions = new List<string>();
+        private readonly List<string> _villainActions = new List<string>();
+
         // ─────────────────────────────────────────
 
         private void Awake()
@@ -73,6 +87,7 @@ namespace NoirRoulette
         private void Start()
         {
             if (gameOverPanel != null) gameOverPanel.SetActive(false);
+            if (slotSelectionPanel != null) slotSelectionPanel.SetActive(false);
 
             // 발사/턴 종료 버튼 리스너 연결
             if (shootButton != null)
@@ -81,6 +96,17 @@ namespace NoirRoulette
                 endTurnButton.onClick.AddListener(() => playerController.OnEndTurnButtonClicked());
             if (restartButton != null)
                 restartButton.onClick.AddListener(() => { GameManager.Instance.StartGame(); });
+
+            // 슬롯 선택 버튼 리스너 연결 (0~5 인덱스)
+            if (slotSelectButtons != null)
+            {
+                for (int i = 0; i < slotSelectButtons.Length; i++)
+                {
+                    int captured = i; // 클로저 캡처용
+                    if (slotSelectButtons[i] != null)
+                        slotSelectButtons[i].onClick.AddListener(() => playerController.OnSlotSelected(captured));
+                }
+            }
         }
 
         // ─────────────────────────────────────────
@@ -92,7 +118,7 @@ namespace NoirRoulette
             UpdatePlayerHP(gm.playerHP);
             UpdateVillainHP(gm.villainHP);
             UpdateVillainMental(gm.villainMental, gm.villainAI ? gm.villainAI.GetMentalState() : MentalState.CALM);
-            UpdateCylinder(gm.cylinderSystem.slots, gm.cylinderSystem.currentIndex);
+            UpdateCylinder(gm.cylinderSystem.slots, gm.cylinderSystem.currentIndex, gm.cylinderSystem.slotStates);
             UpdateVillainHandCount(gm.villainDeckManager.hand.Count);
         }
 
@@ -129,17 +155,31 @@ namespace NoirRoulette
         // ─────────────────────────────────────────
         // 실린더 표시 갱신
         // ─────────────────────────────────────────
+        public void UpdateCylinder(bool[] slots, int currentIdx, CylinderSlotState[] slotStates)
+        {
+            // 상단: 실탄/공탄 수
+            if (cylinderCount_Text != null)
+            {
+                int liveCount = 0;
+                for (int i = currentIdx; i < slots.Length; i++)
+                    if (slots[i] && slotStates[i] != CylinderSlotState.Consumed)
+                        liveCount++;
+                int remaining = slots.Length - currentIdx;
+                int blankCount = remaining - liveCount;
+                cylinderCount_Text.text = $"실탄 {liveCount}발 / 공탄 {blankCount}발";
+            }
+
+            // 6칸 슬롯 상태
+            if (cylinder_Text == null) return;
+            var gm = GameManager.Instance;
+            cylinder_Text.text = "실린더: " + gm.cylinderSystem.GetCylinderDisplayString();
+        }
+
+        // 이전 시그니처 호환용 (slotStates 없이 호출되는 경우)
         public void UpdateCylinder(bool[] slots, int currentIdx)
         {
-            if (cylinder_Text == null) return;
-            System.Text.StringBuilder sb = new System.Text.StringBuilder("실린더: ");
-            for (int i = 0; i < slots.Length; i++)
-            {
-                string mark = slots[i] ? "실" : "공";
-                if (i == currentIdx) sb.Append($"[▶{mark}]");
-                else sb.Append($"[{mark}]");
-            }
-            cylinder_Text.text = sb.ToString();
+            var gm = GameManager.Instance;
+            UpdateCylinder(slots, currentIdx, gm.cylinderSystem.slotStates);
         }
 
         // ─────────────────────────────────────────
@@ -169,7 +209,12 @@ namespace NoirRoulette
                 var btn = btnObj.GetComponent<Button>();
                 var txt = btnObj.GetComponentInChildren<Text>();
 
-                if (txt != null) txt.text = card.cardName;
+                if (txt != null)
+                {
+                    txt.text = card.cardName;
+                    txt.fontSize = 30;
+                    txt.resizeTextForBestFit = false;
+                }
 
                 // 클로저 캡처 방지용 로컬 변수
                 CardData captured = card;
@@ -235,6 +280,116 @@ namespace NoirRoulette
         public void SetEndTurnButtonActive(bool active)
         {
             if (endTurnButton != null) endTurnButton.interactable = active;
+        }
+
+        // ─────────────────────────────────────────
+        // 탄 확인 슬롯 선택 패널 제어
+        // 별도 패널 없이 핸드 영역에 1~6번 슬롯 버튼을 동적 생성
+        // ─────────────────────────────────────────
+        public void ShowSlotSelectionPanel()
+        {
+            if (handPanel == null || cardButtonPrefab == null) return;
+
+            var cyl = GameManager.Instance.cylinderSystem;
+
+            // 기존 카드 버튼 제거
+            foreach (Transform child in handPanel)
+                Destroy(child.gameObject);
+
+            // 슬롯 선택 버튼 1~6 생성
+            for (int i = 0; i < 6; i++)
+            {
+                var btnObj = Instantiate(cardButtonPrefab, handPanel);
+                var btn = btnObj.GetComponent<Button>();
+                var txt = btnObj.GetComponentInChildren<Text>();
+
+                bool isConsumed = cyl.slotStates[i] == CylinderSlotState.Consumed;
+                string stateLabel = GetSlotStateLabel(cyl, i);
+
+                if (txt != null)
+                {
+                    txt.text = $"{i + 1}번 칸\n{stateLabel}";
+                    txt.fontSize = 24;
+                    txt.resizeTextForBestFit = false;
+                }
+
+                if (btn != null)
+                {
+                    btn.interactable = !isConsumed;
+                    int captured = i;
+                    btn.onClick.AddListener(() => playerController.OnSlotSelected(captured));
+                }
+            }
+        }
+
+        // 슬롯 상태 레이블 반환 (슬롯 선택 버튼 표시용)
+        private string GetSlotStateLabel(CylinderSystem cyl, int i)
+        {
+            switch (cyl.slotStates[i])
+            {
+                case CylinderSlotState.Consumed:  return "(소모됨)";
+                case CylinderSlotState.Revealed:  return cyl.slots[i] ? "[실탄]" : "[공탄]";
+                case CylinderSlotState.Peeked:    return "[!]";
+                default:                          return "[?]";
+            }
+        }
+
+        public void HideSlotSelectionPanel()
+        {
+            // handPanel은 UpdatePlayerHand()에서 갱신됨 — 별도 처리 불필요
+            // Inspector 연결된 패널이 있으면 함께 숨김
+            if (slotSelectionPanel != null) slotSelectionPanel.SetActive(false);
+        }
+
+        // ─────────────────────────────────────────
+        // 행동 기록 패널 — 나 / 상대 행동 요약
+        // ─────────────────────────────────────────
+
+        /// <summary>플레이어 행동 1건 추가</summary>
+        public void AddPlayerAction(string action)
+        {
+            _playerActions.Add(action);
+            RefreshActionLog();
+        }
+
+        /// <summary>빌런 행동 1건 추가</summary>
+        public void AddVillainAction(string action)
+        {
+            _villainActions.Add(action);
+            RefreshActionLog();
+        }
+
+        /// <summary>새 턴 시작 시 행동 기록 초기화</summary>
+        public void ClearActionLog()
+        {
+            _playerActions.Clear();
+            _villainActions.Clear();
+            RefreshActionLog();
+        }
+
+        private void RefreshActionLog()
+        {
+            if (actionLogText == null) return;
+
+            var sb = new StringBuilder();
+
+            sb.AppendLine("━━ 나 ━━");
+            if (_playerActions.Count == 0)
+                sb.AppendLine("  (대기 중)");
+            else
+                foreach (var a in _playerActions)
+                    sb.AppendLine($"  · {a}");
+
+            sb.AppendLine();
+
+            sb.AppendLine("━━ 빌런 ━━");
+            if (_villainActions.Count == 0)
+                sb.AppendLine("  (대기 중)");
+            else
+                foreach (var a in _villainActions)
+                    sb.AppendLine($"  · {a}");
+
+            actionLogText.text = sb.ToString();
         }
 
         // ─────────────────────────────────────────

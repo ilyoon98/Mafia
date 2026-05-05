@@ -141,6 +141,10 @@ namespace NoirRoulette
                 bool success = CardEffect.Execute(chosen, false);
                 deck.DiscardCard(chosen);
 
+                // 행동 기록 (허공쏘기/탄확인은 CardEffect 내부에서 기록)
+                if (chosen.cardType != CardType.허공쏘기 && chosen.cardType != CardType.탄확인)
+                    gm.uiManager.AddVillainAction($"[{chosen.cardName}]");
+
                 // ③카드 효과 실패 → 빌런 실수 판정
                 if (!success)
                     gm.villainLastTurnMistake = true;
@@ -168,6 +172,8 @@ namespace NoirRoulette
             };
             bool isMistake = Random.value < mistakeChance;
 
+            CardData attackCard = null;  // 행동 기록에서 참조하기 위해 스코프 상위로
+
             if (isMistake)
             {
                 Debug.Log($"[빌런 AI] 실수 발생! (확률 {mistakeChance * 100}%) → 자기 자신에게 발사.");
@@ -178,8 +184,8 @@ namespace NoirRoulette
             else
             {
                 // 전략적 판단: 조준 또는 급소 카드가 있으면 공격 시도
-                CardData attackCard = FindCardOfType(deck.hand, CardType.조준)
-                                   ?? FindCardOfType(deck.hand, CardType.급소);
+                attackCard = FindCardOfType(deck.hand, CardType.조준)
+                           ?? FindCardOfType(deck.hand, CardType.급소);
 
                 if (attackCard != null && state != MentalState.PANIC)
                 {
@@ -234,6 +240,29 @@ namespace NoirRoulette
                     gm.uiManager.AppendLog("빌런 자기 자신에게 공탄... (실수 기록)");
                 }
             }
+
+            // ── 행동 기록 ──
+            string cardLabel = (attackCard != null && !isMistake) ? $"[{attackCard.cardName}] + " : "";
+            string shotLog;
+            if (isMistake)
+            {
+                shotLog = isLive ? "실수 — 자신에게 발사 → 명중! HP-1"
+                                 : "실수 — 자신에게 발사 → 공탄";
+            }
+            else if (targetBefore == ShootTarget.Opponent)
+            {
+                if (isLive)
+                    shotLog = $"발사 → 명중! 플레이어 HP-{(guksoActive ? 2 : 1)}";
+                else if (guksoActive)
+                    shotLog = "발사 → 공탄 (빌런 HP-1)";
+                else
+                    shotLog = "발사 → 공탄";
+            }
+            else
+            {
+                shotLog = isLive ? "자신에게 발사 → 명중! HP-1" : "자신에게 발사 → 공탄";
+            }
+            gm.uiManager.AddVillainAction($"{cardLabel}{shotLog}");
 
             gm.uiManager.UpdateAll();
         }

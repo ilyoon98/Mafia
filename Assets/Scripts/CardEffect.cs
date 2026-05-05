@@ -22,12 +22,12 @@ namespace NoirRoulette
 
             switch (card.cardType)
             {
-                case CardType.조준:           return Do조준(cyl);
+                case CardType.조준:           return Do조준(gm, cyl, isPlayer);
                 case CardType.급소:           return Do급소(gm, cyl, isPlayer);
                 case CardType.실린더섞기:     return Do실린더섞기(cyl);
                 case CardType.총알추가:       return Do총알추가(cyl);
                 case CardType.카드뺏기:       return Do카드뺏기(isPlayer, playerDeck, villainDeck, gm);
-                case CardType.허공쏘기:       return Do허공쏘기(cyl);
+                case CardType.허공쏘기:       return Do허공쏘기(gm, cyl, isPlayer);
                 case CardType.탄확인:         return Do탄확인(cyl, isPlayer);
                 case CardType.협박:           return Do협박(gm);
                 case CardType.조롱:           return Do조롱(gm, isPlayer);
@@ -45,24 +45,61 @@ namespace NoirRoulette
         // 공격계
         // ──────────────────────────────────────────────────────
 
-        // 조준: 이번 발사를 상대에게 돌림
-        private static bool Do조준(CylinderSystem cyl)
+        // 조준: 플레이어 사용 시 즉시 상대에게 발사. 빌런 사용 시 대상 예약(VillainShoot에서 발사).
+        private static bool Do조준(GameManager gm, CylinderSystem cyl, bool isPlayer)
         {
             cyl.SetTarget(ShootTarget.Opponent);
-            Debug.Log("[조준] 발사 대상 → 상대.");
+
+            if (!isPlayer)
+            {
+                Debug.Log("[조준] 발사 대상 → 상대. (빌런 발사 단계에서 처리)");
+                return true;
+            }
+
+            // 플레이어: 즉시 발사
+            bool isLive = cyl.Fire();
+            if (isLive)
+            {
+                gm.DamageVillain(1, DamageSource.Bullet);
+                gm.uiManager.AppendLog("조준 명중! 빌런 HP -1");
+                gm.uiManager.AddPlayerAction("[조준] → 명중! 빌런 HP-1");
+            }
+            else
+            {
+                gm.uiManager.AppendLog("공탄. 빌런 안전.");
+                gm.uiManager.AddPlayerAction("[조준] → 공탄");
+            }
             return true;
         }
 
-        // 급소: 상대에게 발사 + 급소 플래그 설정
-        // 실제 데미지 계산은 발사 버튼 클릭 시점(PlayerController/VillainAI)에서 처리
+        // 급소: 플레이어 사용 시 즉시 발사 — 명중=HP-2 / 공탄=내 HP-1.
+        // 빌런 사용 시 대상 예약 + 급소 플래그(VillainShoot에서 처리).
         private static bool Do급소(GameManager gm, CylinderSystem cyl, bool isPlayer)
         {
             cyl.SetTarget(ShootTarget.Opponent);
-            if (isPlayer)
-                gm.isGuksoPending = true;
-            else
+
+            if (!isPlayer)
+            {
                 gm.villainAI.isGuksoPendingForVillain = true;
-            Debug.Log("[급소] 발사 대상 → 상대. 명중=HP-2 / 공탄=내 HP-1 예약.");
+                Debug.Log("[급소] 발사 대상 → 상대. 명중=플레이어 HP-2 / 공탄=빌런 HP-1 예약. (빌런 발사 단계에서 처리)");
+                return true;
+            }
+
+            // 플레이어: 즉시 발사
+            bool isLive = cyl.Fire();
+            if (isLive)
+            {
+                gm.DamageVillain(2, DamageSource.Bullet);
+                gm.uiManager.AppendLog("급소 명중! 빌런 HP -2");
+                gm.uiManager.AddPlayerAction("[급소] → 명중! 빌런 HP-2");
+            }
+            else
+            {
+                gm.DamagePlayer(1);
+                gm.uiManager.AppendLog("급소 공탄... 내 HP -1.");
+                gm.uiManager.AddPlayerAction("[급소] → 공탄 (내 HP-1)");
+            }
+            gm.isGuksoPending = false;
             return true;
         }
 
@@ -105,15 +142,20 @@ namespace NoirRoulette
         // 정보계
         // ──────────────────────────────────────────────────────
 
-        // 허공 쏘기: 현재 탄 소모, 실탄/공탄 확인
-        private static bool Do허공쏘기(CylinderSystem cyl)
+        // 허공 쏘기: 현재 탄 소모, 실탄/공탄 확인 + 행동 기록
+        private static bool Do허공쏘기(GameManager gm, CylinderSystem cyl, bool isPlayer)
         {
-            cyl.FireBlank();
+            bool isLive = cyl.FireBlank();
+            string ammo = isLive ? "실탄" : "공탄";
+            if (isPlayer)
+                gm.uiManager.AddPlayerAction($"[허공쏘기] → {ammo}");
+            else
+                gm.uiManager.AddVillainAction($"[허공쏘기] → {ammo}");
             return true;
         }
 
-        // 탄 확인: 임의 칸 1개 확인 (탄 소모 없음)
-        // 빌런 사용 시 블러핑 상태에 따라 거짓 정보를 출력할 수 있음
+        // 탄 확인: 빌런 전용 (플레이어는 PlayerController에서 슬롯 선택 UI로 처리)
+        // 빌런 사용 시 랜덤 칸 선택 → Peeked(!) 표시
         private static bool Do탄확인(CylinderSystem cyl, bool isPlayer)
         {
             int remaining = 6 - cyl.currentIndex;
@@ -128,24 +170,30 @@ namespace NoirRoulette
 
             if (isPlayer)
             {
-                // 플레이어: 항상 실제 결과 표시
-                string type = actualIsLive ? "실탄" : "공탄";
-                Debug.Log($"[탄 확인] {slotIndex + 1}번 칸 → [{type}]");
-                GameManager.Instance.uiManager.AppendLog($"탄 확인: {slotIndex + 1}번 칸 [{type}]");
+                // 플레이어 경로는 PlayerController.UseCard()에서 인터셉트하므로
+                // 여기에 도달하는 경우는 없음 — 폴백으로 Revealed 처리
+                cyl.PeekSlot(slotIndex, true);
             }
             else
             {
-                // 빌런: 블러핑 여부에 따라 반대 정보 출력 가능
+                // 빌런: 랜덤 칸 선택 → Peeked 표시 (UI에서 ! 로 표시)
+                cyl.PeekSlot(slotIndex, false);
+
+                // 블러핑 여부에 따라 진실 or 거짓 발언
                 var villain = GameManager.Instance.villainAI;
-                bool showFalse = villain.isBluffing;
-                bool reportedIsLive = showFalse ? !actualIsLive : actualIsLive;
+                bool reportFalse = villain.isBluffing;
+                bool reportedIsLive = reportFalse ? !actualIsLive : actualIsLive;
                 string actualType   = actualIsLive   ? "실탄" : "공탄";
                 string reportedType = reportedIsLive ? "실탄" : "공탄";
 
-                villain.debug_lastTanHwakIn = $"실제:{actualType} / 보고:{reportedType}";
-                Debug.Log($"[탄 확인] 빌런 {slotIndex + 1}번 칸 실제:[{actualType}] 블러핑:{showFalse} 보고:[{reportedType}]");
+                villain.debug_lastTanHwakIn = $"실제:{actualType} / 발언:{reportedType}";
+                Debug.Log($"[탄 확인] 빌런 {slotIndex + 1}번 칸 실제:[{actualType}] 블러핑:{reportFalse} 발언:[{reportedType}]");
+
+                // 플레이어에게 보이는 발언 (본인이 확인한 칸에 대해서만 말할 수 있음)
                 GameManager.Instance.uiManager.AppendLog(
-                    $"빌런 탄 확인: {slotIndex + 1}번 칸 [{reportedType}]");
+                    $"빌런: \"{slotIndex + 1}번째 칸은 {reportedType}이야!\"");
+                GameManager.Instance.uiManager.AddVillainAction(
+                    $"[탄확인] {slotIndex + 1}번 칸 → \"{reportedType}이야!\"");
             }
             return true;
         }
@@ -186,7 +234,6 @@ namespace NoirRoulette
                 Debug.Log("[눈치채기] 성공! 블러핑 간파.");
                 gm.uiManager.AppendLog("눈치채기 성공! 빌런 블러핑 들킴 → 멘탈 -2");
                 gm.DamageVillainMental(2);
-                // ①블러핑 들킴 → 빌런 실수 판정
                 gm.villainLastTurnMistake = true;
             }
             else
@@ -210,20 +257,18 @@ namespace NoirRoulette
                 if (gm.playerHP >= gm.playerMaxHP)
                 {
                     gm.uiManager.AppendLog("체력 회복: 이미 최대 체력.");
-                    return false; // ③카드 효과 실패
+                    return false;
                 }
                 gm.HealPlayer(1);
                 return true;
             }
-            // 빌런이 체력 회복 사용 (빌런 HP=멘탈 최대는 3)
+            // 빌런이 체력 회복 사용
             if (gm.villainHP >= 3)
             {
                 gm.uiManager.AppendLog("[빌런] 체력 회복: 이미 최대.");
-                // ③빌런 카드 효과 실패 → 실수 판정
                 gm.villainLastTurnMistake = true;
                 return false;
             }
-            // 빌런 회복 (HP=멘탈 연동)
             gm.SetVillainStat(Mathf.Min(3, gm.villainHP + 1));
             gm.uiManager.AppendLog($"[빌런] 체력 회복! HP/멘탈 → {gm.villainHP}");
             return true;
